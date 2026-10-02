@@ -4,7 +4,7 @@ import React from "react";
 import { Order } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Ticket, Calendar, MapPin, CheckCircle2, QrCode, Download } from "lucide-react";
+import { Ticket, Calendar, MapPin, CheckCircle2, Download, UserCheck } from "lucide-react";
 
 interface ETicketCardProps {
   order: Order;
@@ -24,6 +24,10 @@ export function ETicketCard({ order, onReset }: ETicketCardProps) {
         year: "numeric"
       })
     : "Sabtu, 15 November 2026";
+
+  const customerName = order.user?.name || "Pemesan Tiket";
+  const customerEmail = order.user?.email || "email@example.com";
+  const customerPhone = order.user?.phone || "-";
 
   return (
     <div className="w-full max-w-xl mx-auto space-y-6">
@@ -56,6 +60,18 @@ export function ETicketCard({ order, onReset }: ETicketCardProps) {
 
         {/* Middle Body */}
         <div className="p-6 space-y-5">
+          {/* Customer / Attendee Information */}
+          <div className="bg-zinc-800/60 border border-zinc-700/60 rounded-2xl p-3.5 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
+              <UserCheck className="w-5 h-5" />
+            </div>
+            <div className="text-xs">
+              <span className="text-zinc-400 text-[11px] block">Pemegang Tiket:</span>
+              <p className="font-bold text-zinc-100 text-sm">{customerName}</p>
+              <p className="text-zinc-400 text-[11px]">{customerEmail} • {customerPhone}</p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-4 text-xs">
             <div className="space-y-1">
               <span className="text-zinc-400 block flex items-center gap-1">

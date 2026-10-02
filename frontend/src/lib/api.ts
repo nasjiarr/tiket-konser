@@ -1,7 +1,25 @@
-import { Event, Order } from "../types";
+import { Event, Order, User } from "../types";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api";
+
+export async function upsertGuestUserApi(
+  name: string,
+  email: string,
+  phone: string
+): Promise<User> {
+  const res = await fetch(`${API_BASE}/users/guest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email, phone })
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.message || "Gagal menyimpan identitas pemesan");
+  }
+  return data.data;
+}
 
 export async function fetchEvents(): Promise<Event[]> {
   const res = await fetch(`${API_BASE}/events`, { cache: "no-store" });

@@ -4,6 +4,7 @@ import { swagger } from "@elysiajs/swagger";
 import { eventsRoute } from "./routes/events.route";
 import { ordersRoute } from "./routes/orders.route";
 import { paymentsRoute } from "./routes/payments.route";
+import { usersRoute } from "./routes/users.route";
 import { startWorkers } from "./services/queue.service";
 
 const port = process.env.PORT || 3001;
@@ -21,9 +22,10 @@ export const app = new Elysia()
           title: "Tiket Konser API - High Concurrency Engine",
           version: "1.0.0",
           description:
-            "API sistem pemesanan tiket konser dengan Redis Lock TTL, BullMQ Worker, dan Midtrans Payment Gateway."
+            "API sistem pemesanan tiket konser dengan Redis Lock TTL, BullMQ Worker, and Midtrans Payment Gateway."
         },
         tags: [
+          { name: "Users", description: "Identitas Pemesan Tiket (Guest)" },
           { name: "Events", description: "Katalog & Denah Kursi Konser" },
           { name: "Orders", description: "Pemesanan & Hold Kursi Tiket War" },
           { name: "Payments", description: "Midtrans Snap Token & Webhook Gateway" }
@@ -58,7 +60,13 @@ export const app = new Elysia()
     status: "ok",
     timestamp: new Date().toISOString()
   }))
-  .group("/api", (app) => app.use(eventsRoute).use(ordersRoute).use(paymentsRoute))
+  .group("/api", (app) =>
+    app
+      .use(usersRoute)
+      .use(eventsRoute)
+      .use(ordersRoute)
+      .use(paymentsRoute)
+  )
   .listen(port);
 
 console.log(`🦊 Backend is running at http://${app.server?.hostname}:${app.server?.port}`);

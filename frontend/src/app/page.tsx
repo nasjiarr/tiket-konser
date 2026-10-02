@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Event, TicketTier, Seat, Order } from "../types";
+import { Event, TicketTier, Seat, Order, User } from "../types";
 import {
   fetchEvents,
   fetchEventDetail,
+  upsertGuestUserApi,
   holdSeatsApi,
   checkoutOrderApi,
   getSnapTokenApi,
@@ -31,16 +32,25 @@ import {
   CreditCard,
   Zap,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  UserCheck,
+  Edit2
 } from "lucide-react";
-
-// Default dummy user seeded in database
-const DEFAULT_USER_ID = "330bafe2-9f9d-4c93-aa67-be6285011fbf";
 
 export default function TicketingPortal() {
   const [event, setEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Guest User State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [guestForm, setGuestForm] = useState({
+    name: "",
+    email: "",
+    phone: ""
+  });
+  const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
+  const [isSavingUser, setIsSavingUser] = useState(false);
 
   // Selected seats state
   const [selectedSeats, setSelectedSeats] = useState<
@@ -58,7 +68,7 @@ export default function TicketingPortal() {
   // Completed Paid Order state
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
 
-  // 1. Load Event Data
+  // 1. Load LocalStorage User & Event Data
   const loadEvent = useCallback(async () => {
     try {
       setErrorMsg(null);
@@ -75,6 +85,21 @@ export default function TicketingPortal() {
   }, []);
 
   useEffect(() => {
+    // Check saved guest profile in localStorage
+    const saved = localStorage.getItem("konsertix_user");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setCurrentUser(parsed);
+        setGuestForm({
+          name: parsed.name || "",
+          email: parsed.email || "",
+          phone: parsed.phone || ""
+        });
+      } catch (e) {
+        console.error("Failed to parse stored user", e);
+      }
+    }
     loadEvent();
   }, [loadEvent]);
 
@@ -100,7 +125,34 @@ export default function TicketingPortal() {
     return () => clearInterval(interval);
   }, [holdExpiresAt, loadEvent]);
 
-  // 3. Handle Seat Selection Toggle
+  // 3. Save Guest User
+  const handleSaveIdentity = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!guestForm.name || !guestForm.email || !guestForm.phone) {
+      alert("Harap lengkapi semua data diri pemesan.");
+      return null;
+    }
+
+    try {
+      setIsSavingUser(true);
+      const user = await upsertGuestUserApi(
+        guestForm.name,
+        guestForm.email,
+        guestForm.phone
+      );
+      setCurrentUser(user);
+      localStorage.setItem("konsertix_user", JSON.stringify(user));
+      setIsIdentityModalOpen(false);
+      return user;
+    } catch (err: any) {
+      alert(err.message || "Gagal menyimpan identitas");
+      return null;
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
+  // 4. Handle Seat Selection Toggle
   const handleToggleSeat = (seat: Seat, tier: TicketTier) => {
     const isSelected = selectedSeats.some((s) => s.seat.id === seat.id);
 
@@ -115,9 +167,15 @@ export default function TicketingPortal() {
     }
   };
 
-  // 4. Hold & Checkout
+  // 5. Hold & Checkout
   const handleStartBooking = async () => {
     if (!event || selectedSeats.length === 0) return;
+
+    let userToUse = currentUser;
+    if (!userToUse) {
+      setIsIdentityModalOpen(true);
+      return;
+    }
 
     try {
       setIsHolding(true);
@@ -125,22 +183,23 @@ export default function TicketingPortal() {
 
       const seatIds = selectedSeats.map((s) => s.seat.id);
 
-      // Step A: Hold Seats
-      const holdRes = await holdSeatsApi(event.id, DEFAULT_USER_ID, seatIds);
+      // Step A: Hold Seats (anti double-booking)
+      const holdRes = await holdSeatsApi(event.id, userToUse.id, seatIds);
 
       // Step B: Checkout Order
-      const checkoutRes = await checkoutOrderApi(event.id, DEFAULT_USER_ID, seatIds);
+      const checkoutRes = await checkoutOrderApi(event.id, userToUse.id, seatIds);
 
       setHoldExpiresAt(new Date(holdRes.expiresAt));
       setActiveOrder({
         id: checkoutRes.data.orderId,
-        userId: DEFAULT_USER_ID,
+        userId: userToUse.id,
         eventId: event.id,
         totalAmount: checkoutRes.data.totalAmount,
         status: "PENDING",
         snapToken: null,
         snapRedirectUrl: null,
         expiresAt: checkoutRes.data.expiresAt,
+        user: userToUse,
         items: selectedSeats.map((s) => ({
           id: s.seat.id,
           orderId: checkoutRes.data.orderId,
@@ -152,7 +211,7 @@ export default function TicketingPortal() {
       });
 
       setIsCheckoutOpen(true);
-      loadEvent(); // Refresh seat status
+      loadEvent();
     } catch (err: any) {
       setErrorMsg(err.message || "Gagal mengamankan tiket.");
       loadEvent();
@@ -161,7 +220,7 @@ export default function TicketingPortal() {
     }
   };
 
-  // 5. Pay via Mock Settlement (Instant demo)
+  // 6. Pay via Mock Settlement (Instant demo)
   const handleInstantPay = async () => {
     if (!activeOrder) return;
     try {
@@ -185,7 +244,7 @@ export default function TicketingPortal() {
     }
   };
 
-  // 6. Pay via Midtrans Snap Token
+  // 7. Pay via Midtrans Snap Token
   const handleMidtransSnapPay = async () => {
     if (!activeOrder) return;
     try {
@@ -210,7 +269,6 @@ export default function TicketingPortal() {
 
   const totalPrice = selectedSeats.reduce((acc, curr) => acc + Number(curr.tier.price), 0);
 
-  // Format seconds to MM:SS
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
     const remainderSecs = secs % 60;
@@ -246,11 +304,34 @@ export default function TicketingPortal() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-600 bg-zinc-100 px-3 py-1.5 rounded-full font-medium">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Guest Identity Chip */}
+          {currentUser ? (
+            <button
+              onClick={() => setIsIdentityModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-zinc-700 bg-zinc-100 hover:bg-zinc-200/80 px-3 py-1.5 rounded-full font-medium transition"
+              title="Klik untuk ubah data pemesan"
+            >
+              <UserCheck className="w-3.5 h-3.5 text-blue-600" />
+              <span className="max-w-[120px] truncate">{currentUser.name}</span>
+              <Edit2 className="w-3 h-3 text-zinc-400 ml-0.5" />
+            </button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsIdentityModalOpen(true)}
+              className="text-xs rounded-full px-3"
+            >
+              Isi Data Pemesan
+            </Button>
+          )}
+
+          <div className="hidden md:flex items-center gap-1.5 text-xs text-zinc-600 bg-zinc-100 px-3 py-1.5 rounded-full font-medium">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
             <span>Anti Double-Booking Active</span>
           </div>
+
           <Button
             variant="outline"
             size="sm"
@@ -258,14 +339,13 @@ export default function TicketingPortal() {
             className="flex items-center gap-1.5 text-xs rounded-xl"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span>Refresh Kursi</span>
+            <span className="hidden sm:inline">Refresh Kursi</span>
           </Button>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 space-y-8">
-        {/* If Order is Paid, show E-Ticket View */}
         {completedOrder ? (
           <ETicketCard order={completedOrder} onReset={handleResetFlow} />
         ) : (
@@ -349,7 +429,7 @@ export default function TicketingPortal() {
         )}
       </main>
 
-      {/* Floating Bottom Checkout Bar (When seats are selected) */}
+      {/* Floating Bottom Checkout Bar */}
       {!completedOrder && selectedSeats.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-zinc-200 px-4 sm:px-8 py-4 shadow-2xl">
           <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -399,7 +479,75 @@ export default function TicketingPortal() {
         </div>
       )}
 
-      {/* Checkout Dialog Modal */}
+      {/* Modal 1: Guest Identity Form */}
+      <Dialog open={isIdentityModalOpen} onOpenChange={setIsIdentityModalOpen}>
+        <DialogContent className="max-w-md rounded-3xl p-6 bg-white border border-zinc-200 shadow-2xl">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-lg font-bold">
+              Data Diri Pemesan (Guest)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500">
+              Tanpa perlu login/password. Masukkan identitas Anda untuk pencetakan e-ticket dan validasi antrean.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSaveIdentity} className="space-y-4 my-2 text-xs">
+            <div className="space-y-1">
+              <label className="font-semibold text-zinc-700 block">
+                Nama Lengkap (Sesuai KTP/ID)
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="Contoh: Budi Santoso"
+                value={guestForm.name}
+                onChange={(e) => setGuestForm({ ...guestForm, name: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-300 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="font-semibold text-zinc-700 block">
+                Alamat Email Aktif (Untuk Pengiriman E-Ticket)
+              </label>
+              <input
+                type="email"
+                required
+                placeholder="budi@example.com"
+                value={guestForm.email}
+                onChange={(e) => setGuestForm({ ...guestForm, email: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-300 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="font-semibold text-zinc-700 block">
+                No. WhatsApp / Handphone
+              </label>
+              <input
+                type="tel"
+                required
+                placeholder="081234567890"
+                value={guestForm.phone}
+                onChange={(e) => setGuestForm({ ...guestForm, phone: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-300 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button
+                type="submit"
+                disabled={isSavingUser}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-5 rounded-xl text-xs"
+              >
+                {isSavingUser ? "Menyimpan Data..." : "Simpan & Lanjutkan"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal 2: Checkout & Payment Confirmation */}
       <Dialog open={isCheckoutOpen} onOpenChange={setIsCheckoutOpen}>
         <DialogContent className="max-w-md rounded-3xl p-6 bg-white border border-zinc-200 shadow-2xl">
           <DialogHeader className="space-y-2">
@@ -421,6 +569,20 @@ export default function TicketingPortal() {
 
           {activeOrder && (
             <div className="space-y-4 my-2 text-xs">
+              {/* Attendee Summary */}
+              {currentUser && (
+                <div className="bg-blue-50/60 border border-blue-200/60 rounded-2xl p-3 flex items-center justify-between">
+                  <div>
+                    <span className="text-zinc-400 text-[10px] block">Pemesan:</span>
+                    <p className="font-bold text-zinc-900">{currentUser.name}</p>
+                    <p className="text-zinc-500 text-[11px]">{currentUser.email}</p>
+                  </div>
+                  <Badge variant="outline" className="bg-white text-[10px]">
+                    Guest Verified
+                  </Badge>
+                </div>
+              )}
+
               <div className="bg-zinc-50 rounded-2xl p-4 border border-zinc-100 space-y-2">
                 <div className="flex justify-between text-zinc-500">
                   <span>ID Pesanan</span>
