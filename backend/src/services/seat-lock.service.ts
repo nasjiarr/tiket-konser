@@ -33,7 +33,6 @@ export class SeatLockService {
         );
 
         if (!acquired) {
-          // Already held by another user in Redis
           throw new Error(`Kursi dengan ID ${seatId} sedang di-hold oleh pengguna lain`);
         }
         acquiredRedisKeys.push(lockKey);
@@ -41,18 +40,19 @@ export class SeatLockService {
 
       // 2. Strong Consistency Layer: PostgreSQL Transaction with Pessimistic Row Lock (FOR UPDATE)
       await db.transaction(async (tx) => {
-        // Raw query for row-level locking
-        const seatRows = await tx.execute(
-          sql`SELECT id, tier_id, status FROM seats WHERE id IN ${seatIds} FOR UPDATE`
-        );
+        const seatRows = await tx
+          .select()
+          .from(seats)
+          .where(inArray(seats.id, seatIds))
+          .for("update");
 
         if (seatRows.length !== seatIds.length) {
           throw new Error("Beberapa kursi yang dipilih tidak ditemukan");
         }
 
-        for (const row of seatRows as any[]) {
+        for (const row of seatRows) {
           if (row.status !== "AVAILABLE") {
-            throw new Error(`Kursi ${row.id} tidak lagi tersedia (status: ${row.status})`);
+            throw new Error(`Kursi ${row.seatNumber} tidak lagi tersedia (status: ${row.status})`);
           }
         }
 
@@ -64,8 +64,8 @@ export class SeatLockService {
 
         // Group by tierId to decrement availableSeats in ticket_tiers
         const tierCounts: Record<string, number> = {};
-        for (const row of seatRows as any[]) {
-          tierCounts[row.tier_id] = (tierCounts[row.tier_id] || 0) + 1;
+        for (const row of seatRows) {
+          tierCounts[row.tierId] = (tierCounts[row.tierId] || 0) + 1;
         }
 
         for (const [tierId, count] of Object.entries(tierCounts)) {
@@ -87,7 +87,6 @@ export class SeatLockService {
         expiresAt: expiresAt.toISOString()
       };
     } catch (error: any) {
-      // Rollback any acquired Redis keys
       if (acquiredRedisKeys.length > 0) {
         await redis.del(...acquiredRedisKeys);
       }
@@ -105,36 +104,35 @@ export class SeatLockService {
     const keys = seatIds.map((id) => `seat:hold:${id}`);
     await redis.del(...keys);
 
-    // 2. Update PostgreSQL seats back to AVAILABLE
-    await db.transaction(async (tx) => {
-      const seatRows = await tx.execute(
-        sql`SELECT id, tier_id, status FROM seats WHERE id IN ${seatIds} FOR UPDATE`
-      );
-
-      const heldSeats = (seatRows as any[]).filter((s) => s.status === "HELD");
-      if (heldSeats.length === 0) return;
-
-      const heldIds = heldSeats.map((s) => s.id);
-
-      await tx
-        .update(seats)
-        .set({ status: "AVAILABLE" })
-        .where(inArray(seats.id, heldIds));
-
-      const tierCounts: Record<string, number> = {};
-      for (const row of heldSeats) {
-        tierCounts[row.tier_id] = (tierCounts[row.tier_id] || 0) + 1;
-      }
-
-      for (const [tierId, count] of Object.entries(tierCounts)) {
-        await tx
-          .update(ticketTiers)
-          .set({
-            availableSeats: sql`${ticketTiers.availableSeats} + ${count}`
-          })
-          .where(eq(ticketTiers.id, tierId));
-      }
+    // 2. Query held seats
+    const heldSeats = await db.query.seats.findMany({
+      where: inArray(seats.id, seatIds)
     });
+
+    if (heldSeats.length === 0) return;
+
+    // 3. Update status back to AVAILABLE
+    await db
+      .update(seats)
+      .set({ status: "AVAILABLE" })
+      .where(inArray(seats.id, seatIds));
+
+    // 4. Restore availableSeats count in ticket_tiers
+    const tierCounts: Record<string, number> = {};
+    for (const row of heldSeats) {
+      if (row.status === "HELD") {
+        tierCounts[row.tierId] = (tierCounts[row.tierId] || 0) + 1;
+      }
+    }
+
+    for (const [tierId, count] of Object.entries(tierCounts)) {
+      await db
+        .update(ticketTiers)
+        .set({
+          availableSeats: sql`${ticketTiers.availableSeats} + ${count}`
+        })
+        .where(eq(ticketTiers.id, tierId));
+    }
   }
 
   /**

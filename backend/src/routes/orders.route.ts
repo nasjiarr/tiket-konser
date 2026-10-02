@@ -4,6 +4,7 @@ import { db } from "../db";
 import { orders, orderItems, seats, ticketTiers } from "../db/schema";
 import { SeatLockService, HOLD_TTL_SECONDS } from "../services/seat-lock.service";
 import { RateLimiterService } from "../services/rate-limiter.service";
+import { scheduleOrderExpiration } from "../services/queue.service";
 
 export const ordersRoute = new Elysia({ prefix: "/orders" })
   // 1. Hold Seats (Ticket War entry point)
@@ -112,6 +113,9 @@ export const ordersRoute = new Elysia({ prefix: "/orders" })
 
         return createdOrder;
       });
+
+      // Schedule BullMQ expiration job
+      await scheduleOrderExpiration(order.id, HOLD_TTL_SECONDS * 1000);
 
       return {
         success: true,

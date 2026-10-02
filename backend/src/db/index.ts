@@ -4,7 +4,7 @@ import * as schema from "./schema";
 
 const connectionString =
   process.env.DATABASE_URL ||
-  "postgresql://postgres:postgres@192.168.1.13:5432/tiket_konser";
+  "postgresql://postgres:postgres@100.100.76.82:5432/tiket_konser";
 
 // Disable prefetch as it is not supported for Transactions
 const client = postgres(connectionString, {
