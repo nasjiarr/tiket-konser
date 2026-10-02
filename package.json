@@ -1,0 +1,10 @@
+{
+  "name": "tiket-konser",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && bun --watch src/index.ts",
+    "dev:frontend": "cd frontend && bun run dev",
+    "build:frontend": "cd frontend && bun run build"
+  }
+}
